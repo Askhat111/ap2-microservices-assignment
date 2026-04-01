@@ -1,0 +1,23 @@
+version: '3.8'
+services:
+  order-db:
+    image: postgres:15
+    environment:
+      POSTGRES_USER: order_user
+      POSTGRES_PASSWORD: secretpassword
+      POSTGRES_DB: order_db
+    volumes:
+      - ./order-service/migrations/init.sql:/docker-entrypoint-initdb.d/init.sql
+    ports:
+      - "55432:5432"
+
+  payment-db:
+    image: postgres:15
+    environment:
+      POSTGRES_USER: payment_user
+      POSTGRES_PASSWORD: secretpassword
+      POSTGRES_DB: payment_db
+    volumes:
+      - ./payment-service/migrations/init.sql:/docker-entrypoint-initdb.d/init.sql
+    ports:
+      - "55433:5432"

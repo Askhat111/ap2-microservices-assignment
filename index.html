@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AITU Microservices | Order System</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <style>
+        :root { --primary-blue: #004a99; --success-green: #28a745; --danger-red: #dc3545; }
+        body { background-color: #f0f2f5; font-family: 'Segoe UI', Roboto, sans-serif; }
+        .navbar { background-color: var(--primary-blue); color: white; margin-bottom: 30px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+        .card { border: none; border-radius: 12px; box-shadow: 0 4px 12px rgba(0,0,0,0.05); margin-bottom: 20px; transition: transform 0.2s; }
+        .card:hover { transform: translateY(-2px); }
+        .card-title { font-weight: 700; color: #333; margin-bottom: 20px; display: flex; align-items: center; gap: 10px; }
+        .btn-primary { background-color: var(--primary-blue); border: none; padding: 10px 20px; font-weight: 600; }
+        .btn-primary:hover { background-color: #003366; }
+        .status-badge { font-weight: 600; padding: 6px 12px; border-radius: 8px; font-size: 0.9rem; text-transform: uppercase; }
+        .Paid { background-color: #d1e7dd; color: #0f5132; }
+        .Failed { background-color: #f8d7da; color: #842029; }
+        .Pending { background-color: #fff3cd; color: #664d03; }
+        .Cancelled { background-color: #e2e3e5; color: #41464b; }
+        #orderDetails { background-color: white; border-radius: 8px; padding: 20px; border-left: 5px solid var(--primary-blue); }
+    </style>
+</head>
+<body>
+
+<nav class="navbar">
+    <div class="container">
+        <span class="navbar-brand mb-0 h1">Order Dashboard</span>
+    </div>
+</nav>
+
+<div class="container">
+    <div class="row">
+        <div class="col-md-5">
+            <div class="card p-4">
+                <h5 class="card-title">🛒 New Order</h5>
+                <div class="mb-3">
+                    <label class="form-label text-muted small">ITEM NAME</label>
+                    <input type="text" id="itemName" class="form-control form-control-lg" placeholder="e.g. Mechanical Keyboard">
+                </div>
+                <div class="mb-3">
+                    <label class="form-label text-muted small">AMOUNT (CENTS)</label>
+                    <input type="number" id="amount" class="form-control form-control-lg" placeholder="e.g. 45000">
+                </div>
+                <button onclick="createOrder()" class="btn btn-primary w-100">Place Order</button>
+            </div>
+        </div>
+
+        <div class="col-md-7">
+            <div class="card p-4">
+                <h5 class="card-title">🔍 Track & Manage</h5>
+                <div class="input-group mb-4">
+                    <input type="text" id="searchId" class="form-control" placeholder="Paste Order UUID here...">
+                    <button onclick="fetchOrder()" class="btn btn-outline-dark">Check Status</button>
+                </div>
+                
+                <div id="orderDetails" style="display: none;">
+                    <div class="d-flex justify-content-between align-items-start mb-3">
+                        <div>
+                            <h6 class="text-muted small mb-1">ORDER ID</h6>
+                            <code id="resId" class="text-dark"></code>
+                        </div>
+                        <span id="resStatus" class="status-badge"></span>
+                    </div>
+                    <div class="row">
+                        <div class="col-6">
+                            <h6 class="text-muted small mb-1">PRODUCT</h6>
+                            <p id="resItem" class="fw-bold mb-0"></p>
+                        </div>
+                        <div class="col-6">
+                            <h6 class="text-muted small mb-1">TOTAL AMOUNT</h6>
+                            <p class="fw-bold mb-0">$<span id="resAmount"></span></p>
+                        </div>
+                    </div>
+                    <hr>
+                    <div id="actionButtons" class="text-end">
+                        <button onclick="cancelOrder()" class="btn btn-outline-danger btn-sm">Cancel Order</button>
+                    </div>
+                </div>
+
+                <div id="errorMsg" class="alert alert-danger mt-3" style="display: none;"></div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+    const API_BASE = "http://localhost:8080/orders";
+
+    async function createOrder() {
+        const payload = {
+            customer_id: "askhat_user",
+            item_name: document.getElementById('itemName').value,
+            amount: parseInt(document.getElementById('amount').value)
+        };
+        try {
+            const resp = await fetch(API_BASE, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            });
+            const data = await resp.json();
+            if (resp.ok) {
+                document.getElementById('searchId').value = data.ID;
+                displayOrder(data);
+            } else { showError(data.error || "Logic Error"); }
+        } catch (e) { showError("Order Service is Offline"); }
+    }
+
+    async function fetchOrder() {
+        const id = document.getElementById('searchId').value;
+        if (!id) return;
+        try {
+            const resp = await fetch(`${API_BASE}/${id}`);
+            const data = await resp.json();
+            if (resp.ok) displayOrder(data);
+            else showError("Order not found in Database");
+        } catch (e) { showError("Connection Error"); }
+    }
+
+    async function cancelOrder() {
+        const id = document.getElementById('resId').innerText;
+        try {
+            const resp = await fetch(`${API_BASE}/${id}/cancel`, { method: 'PATCH' });
+            if (resp.ok) fetchOrder();
+            else showError("Cannot cancel this order");
+        } catch (e) { showError("Action Failed"); }
+    }
+
+    function displayOrder(data) {
+        document.getElementById('errorMsg').style.display = 'none';
+        document.getElementById('orderDetails').style.display = 'block';
+        document.getElementById('resId').innerText = data.ID;
+        document.getElementById('resItem').innerText = data.ItemName;
+        document.getElementById('resAmount').innerText = (data.Amount / 100).toFixed(2);
+        const st = document.getElementById('resStatus');
+        st.innerText = data.Status;
+        st.className = `status-badge ${data.Status}`;
+    }
+
+    function showError(msg) {
+        const err = document.getElementById('errorMsg');
+        err.innerText = msg;
+        err.style.display = 'block';
+        document.getElementById('orderDetails').style.display = 'none';
+    }
+</script>
+</body>
+</html>

@@ -1,0 +1,16 @@
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+bin/
+
+pgdata/
+*.db
+*.sqlite
+
+.DS_Store
+Thumbs.db
+
+.idea/
+.vscode/
