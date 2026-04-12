@@ -1,21 +1,10 @@
-Order & Payment Microservices System (gRPC Assignment)
+# Order & Payment Microservices System (gRPC Assignment)
 This project implements a microservices architecture using Go, gRPC, and REST (Gin). The system consists of an Order Service and a Payment Service communicating over gRPC, with an automated Contract-First workflow.
 
-Architecture Diagram
-The following diagram illustrates the communication flow between the services:
-
-Client sends an HTTP POST request to the Order Service (Port 8080).
-
-Order Service creates a record in the Order DB and calls the Payment Service via gRPC (Port 50051).
-
-Payment Service processes the transaction and returns a response.
-
-Order Service updates the status in the DB and broadcasts the change via gRPC Server-side Streaming (Port 50052) to all subscribed clients.
-
-🛠 Project Structure & Repositories
+# 🛠 Project Structure & Repositories
 Following the Contract-First principle, the project is split into separate repositories:
 
-Repository A (Protos): github.com/Askhat111/protos-repository
+Repository A (Protos): https://github.com/Askhat111/protos-repository
 
 Contains only .proto definitions for the services.
 
@@ -27,7 +16,7 @@ Order Service: Current repository (gRPC Server/Client & REST).
 
 Payment Service: Current repository (gRPC Server).
 
-📋 Features Implemented
+# 📋 Features Implemented
 1. Contract-First Flow (30%)
 Automated remote code generation via GitHub Actions.
 
@@ -50,7 +39,7 @@ Implemented a Unary Interceptor in the Payment Service.
 
 Logs every incoming request: Method Name, Duration, and Status.
 
-    How to Run
+# How to Run
 Prerequisites
 Docker & Docker Compose (for PostgreSQL)
 
@@ -89,12 +78,23 @@ Invoke SubscribeToOrderUpdates with the order_id received from the REST response
 
 We will see real-time status updates as the order moves from Pending to Paid.
 
-    Evidence
+# Evidence
 gRPC Logging: Console logs show [gRPC] Method: 
 ![alt text](image-1.png)
 
 Streaming: Real-time JSON updates appear in the Postman gRPC window upon order creation.
 ![alt text](image-2.png)
+
+# Architecture Diagram
+The following diagram illustrates the communication flow between the services:
+
+Client sends an HTTP POST request to the Order Service (Port 8080).
+
+Order Service creates a record in the Order DB and calls the Payment Service via gRPC (Port 50051).
+
+Payment Service processes the transaction and returns a response.
+
+Order Service updates the status in the DB and broadcasts the change via gRPC Server-side Streaming (Port 50052) to all subscribed clients.
 
 ```mermaid
 graph TD
