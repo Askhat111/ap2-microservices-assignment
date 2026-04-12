@@ -1,55 +1,115 @@
-# Order & Payment Platform - Clean Architecture Microservices
+Order & Payment Microservices System (gRPC Assignment)
+This project implements a microservices architecture using Go, gRPC, and REST (Gin). The system consists of an Order Service and a Payment Service communicating over gRPC, with an automated Contract-First workflow.
 
-## Architecture Decisions & Bounded Contexts
-This platform is decomposed into two distinct microservices: **Order Service** and **Payment Service**. 
-Each service operates within its own **Bounded Context**, meaning they own their specific domain logic and data without sharing any models or databases. 
-- **Order Context**: Manages the lifecycle of a customer's order (Pending, Paid, Failed, Cancelled).
-- **Payment Context**: Manages financial transaction validations and enforces business rules (declining amounts > 100,000 cents).
+Architecture Diagram
+The following diagram illustrates the communication flow between the services:
 
-The codebase follows **Clean Architecture** principles. The business logic inside the `usecase` layer is completely isolated from external frameworks. The `delivery` layer (Gin HTTP handlers) and `repository` layer (PostgreSQL) depend on domain interfaces, adhering to the Dependency Inversion Principle.
+Client sends an HTTP POST request to the Order Service (Port 8080).
 
-## Failure Handling
-Inter-service communication is handled synchronously via REST. To ensure resilience and prevent cascading failures:
-1. The Order Service communicates with the Payment Service using a dedicated Gateway with an explicit **2-second timeout** on the `http.Client`.
-2. If the Payment Service is down, unresponsive, or returns an error, the Order Service catches this timeout.
-3. It immediately updates the local Order state in the database to `Failed` and returns a `503 Service Unavailable` to the client. This guarantees state consistency instead of leaving orders permanently "Pending".
+Order Service creates a record in the Order DB and calls the Payment Service via gRPC (Port 50051).
 
-## API Examples (cURL)
+Payment Service processes the transaction and returns a response.
 
-**Create a Successful Order(Amount ≤ 100,000 cents):**
-```bash
-curl.exe -X POST http://localhost:8080/orders -H "Content-Type: application/json" -d "{\`"customer_id\`": \`"user_01\`", \`"item_name\`": \`"Keyboard\`", \`"amount\`": 45000}"
-```
-**Create a Declined Order (Amount > 100,000 cents):** 
-```bash
-curl.exe -X POST http://localhost:8080/orders -H "Content-Type: application/json" -d "{\`"customer_id\`": \`"user_01\`", \`"item_name\`": \`"Laptop\`", \`"amount\`": 150000}"
-```
-**Test Service Failure (503 Service Unavailable):**
-```bash
-curl.exe -X POST http://localhost:8080/orders -H "Content-Type: application/json" -d "{\`"customer_id\`": \`"std_003\`", \`"item_name\`": \`"Mouse\`", \`"amount\`": 2500}"
-```
-**Check Order Status:**
-```bash
-curl.exe -X GET http://localhost:8080/orders/{order_id}
-```
-**Cancel a Pending/Failed Order:**
-```bash
-curl.exe -X PATCH http://localhost:8080/orders/{order_id}/cancel
-```
+Order Service updates the status in the DB and broadcasts the change via gRPC Server-side Streaming (Port 50052) to all subscribed clients.
+
+🛠 Project Structure & Repositories
+Following the Contract-First principle, the project is split into separate repositories:
+
+Repository A (Protos): github.com/Askhat111/protos-repository
+
+Contains only .proto definitions for the services.
+
+Repository B (Generated): git clone https://github.com/Askhat111/converted-proto.git
+
+GitHub Actions automatically compiles .proto files into .pb.go code and pushes them here.
+
+Order Service: Current repository (gRPC Server/Client & REST).
+
+Payment Service: Current repository (gRPC Server).
+
+📋 Features Implemented
+1. Contract-First Flow (30%)
+Automated remote code generation via GitHub Actions.
+
+Centralized dependency management using a shared generated repository.
+
+2. gRPC Migration & Configuration (30%)
+Order Service (Client): Internal calls to Payment Service use gRPC instead of traditional HTTP.
+
+Payment Service (Server): Implements the ProcessPayment RPC.
+
+Environment Variables: No hardcoded IPs or Ports. Configured via DATABASE_URL, GRPC_PORT, and PAYMENT_SERVICE_ADDR.
+
+3. Order Tracking - Server-side Streaming (15%)
+Endpoint: rpc SubscribeToOrderUpdates(OrderRequest) returns (stream OrderStatusUpdate).
+
+Real-time Logic: The stream is tied to the PostgreSQL database. When a status changes, the update is pushed to the client immediately via Go Channels.
+
+4. gRPC Interceptor (Bonus +10%)
+Implemented a Unary Interceptor in the Payment Service.
+
+Logs every incoming request: Method Name, Duration, and Status.
+
+    How to Run
+Prerequisites
+Docker & Docker Compose (for PostgreSQL)
+
+Go 1.21+
+
+1. Setup Databases
+Run the containers for both service databases:
+
+Bash
+docker-compose up -d
+2. Run Payment Service
+Bash
+cd payment-service
+go run cmd/main.go
+3. Run Order Service
+Bash
+cd order-service
+go run cmd/main.go
+🧪 Testing
+Create an Order (REST)
+URL: POST http://localhost:8080/orders
+Body:
+
+JSON
+{
+  "customer_id": "Askhat",
+  "item_name": "Laptop",
+  "amount": 50000
+}
+Subscribe to Updates (gRPC Stream)
+Open Postman and create a gRPC Request.
+
+Connect to localhost:50052.
+
+Invoke SubscribeToOrderUpdates with the order_id received from the REST response.
+
+We will see real-time status updates as the order moves from Pending to Paid.
+
+    Evidence
+gRPC Logging: Console logs show [gRPC] Method: 
+![alt text](image-1.png)
+
+Streaming: Real-time JSON updates appear in the Postman gRPC window upon order creation.
+![alt text](image-2.png)
 
 ```mermaid
 graph TD
-    Client([Web Client / Postman]) -->|HTTP POST /orders| API_Gateway(Order Service :8080)
+    Client[Client / Postman] -->|HTTP POST :8080| OrderService[Order Service]
+    Client -->|gRPC Stream :50052| OrderService
+    OrderService -->|gRPC Unary :50051| PaymentService[Payment Service]
     
-    subgraph Order Bounded Context
-        API_Gateway --> UC_Order(Order Use Case)
-        UC_Order --> Repo_Order(Order Repository)
-        Repo_Order -->|Read/Write| DB_Order[(Order PostgreSQL :5432)]
+    subgraph Databases
+        OrderService --- ODB[(Order DB)]
+        PaymentService --- PDB[(Payment DB)]
     end
 
-    subgraph Payment Bounded Context
-        UC_Payment(Payment Use Case) --> Repo_Payment(Payment Repository)
-        Repo_Payment -->|Read/Write| DB_Payment[(Payment PostgreSQL :5433)]
+    subgraph Contracts
+        ProtoRepo[Protos Repository] -->|GitHub Actions| GenRepo[Generated Code Repo]
+        GenRepo -->|go get| OrderService
+        GenRepo -->|go get| PaymentService
     end
-
-    UC_Order -.->|REST HTTP POST /payments\nwith Timeout| UC_Payment
+    ```
