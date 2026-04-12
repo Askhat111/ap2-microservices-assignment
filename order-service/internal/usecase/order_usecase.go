@@ -5,16 +5,19 @@ import (
 	"order-service/internal/domain"
 	"time"
 
+	basepb "github.com/Askhat111/converted-proto/base/frontend/v1"
 	"github.com/google/uuid"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 type OrderUseCase struct {
-	repo    domain.OrderRepository
-	gateway domain.PaymentGateway
+	repo       domain.OrderRepository
+	gateway    domain.PaymentGateway
+	updateChan chan *basepb.OrderStatusUpdate // Канал для стриминга статусов
 }
 
-func NewOrderUseCase(repo domain.OrderRepository, gateway domain.PaymentGateway) *OrderUseCase {
-	return &OrderUseCase{repo: repo, gateway: gateway}
+func NewOrderUseCase(repo domain.OrderRepository, gateway domain.PaymentGateway, ch chan *basepb.OrderStatusUpdate) *OrderUseCase {
+	return &OrderUseCase{repo: repo, gateway: gateway, updateChan: ch}
 }
 
 func (uc *OrderUseCase) CreateOrder(customerID, itemName string, amount int64) (*domain.Order, error) {
@@ -42,12 +45,20 @@ func (uc *OrderUseCase) CreateOrder(customerID, itemName string, amount int64) (
 	}
 
 	newStatus := "Paid"
-	if paymentStatus == "Declined" {
+	if paymentStatus == "Failed" || paymentStatus == "Declined" {
 		newStatus = "Failed"
 	}
 
 	uc.repo.UpdateStatus(order.ID, newStatus)
 	order.Status = newStatus
+
+	if uc.updateChan != nil {
+		uc.updateChan <- &basepb.OrderStatusUpdate{
+			OrderId:   order.ID,
+			Status:    newStatus,
+			UpdatedAt: timestamppb.Now(),
+		}
+	}
 
 	return order, nil
 }
@@ -57,17 +68,5 @@ func (uc *OrderUseCase) GetOrder(id string) (*domain.Order, error) {
 }
 
 func (uc *OrderUseCase) CancelOrder(id string) error {
-	order, err := uc.repo.GetByID(id)
-	if err != nil {
-		return err
-	}
-
-	if order.Status == "Paid" {
-		return errors.New("paid orders cannot be cancelled")
-	}
-	if order.Status != "Pending" {
-		return errors.New("only pending orders can be cancelled")
-	}
-
 	return uc.repo.UpdateStatus(id, "Cancelled")
 }

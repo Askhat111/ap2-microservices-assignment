@@ -1,43 +1,38 @@
 package gateway
 
 import (
-	"bytes"
-	"encoding/json"
-	"errors"
-	"net/http"
-	"time"
+	"context"
+	"log"
+
+	basepb "github.com/Askhat111/converted-proto/base/frontend/v1"
+	servicepb "github.com/Askhat111/converted-proto/service/frontend/client/v1"
+
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
 )
 
-type HTTPPaymentGateway struct {
-	client  *http.Client
-	baseURL string
+type PaymentGateway struct {
+	client servicepb.PaymentServiceClient
 }
 
-func NewHTTPPaymentGateway(baseURL string) *HTTPPaymentGateway {
-	return &HTTPPaymentGateway{
-		client:  &http.Client{Timeout: 2 * time.Second},
-		baseURL: baseURL,
-	}
-}
-
-func (g *HTTPPaymentGateway) ProcessPayment(orderID string, amount int64) (string, error) {
-	payload := map[string]interface{}{
-		"order_id": orderID,
-		"amount":   amount,
-	}
-	jsonPayload, _ := json.Marshal(payload)
-
-	resp, err := g.client.Post(g.baseURL+"/payments", "application/json", bytes.NewBuffer(jsonPayload))
+func NewPaymentGateway(paymentURL string) (*PaymentGateway, error) {
+	conn, err := grpc.Dial(paymentURL, grpc.WithTransportCredentials(insecure.NewCredentials()))
 	if err != nil {
-		return "", err
+		return nil, err
 	}
-	defer resp.Body.Close()
+	return &PaymentGateway{client: servicepb.NewPaymentServiceClient(conn)}, nil
+}
 
-	if resp.StatusCode != http.StatusOK {
-		return "", errors.New("payment service error")
+func (g *PaymentGateway) ProcessPayment(orderID string, amount int64) (string, error) {
+	req := &basepb.PaymentRequest{
+		OrderId: orderID,
+		Amount:  amount,
 	}
 
-	var result map[string]string
-	json.NewDecoder(resp.Body).Decode(&result)
-	return result["status"], nil
+	resp, err := g.client.ProcessPayment(context.Background(), req)
+	if err != nil {
+		log.Printf("Payment gRPC Error: %v", err)
+		return "Failed", err
+	}
+	return resp.Status, nil
 }
