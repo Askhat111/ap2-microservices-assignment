@@ -1,4 +1,3 @@
-version: '3.8'
 services:
   order-db:
     image: postgres:15

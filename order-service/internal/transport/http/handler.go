@@ -15,32 +15,36 @@ func NewOrderHandler(uc *usecase.OrderUseCase) *OrderHandler {
 	return &OrderHandler{useCase: uc}
 }
 
+type createOrderRequest struct {
+	CustomerID string `json:"customer_id"`
+	ItemName   string `json:"item_name"`
+	Amount     int64  `json:"amount"`
+}
+
 func (h *OrderHandler) CreateOrder(c *gin.Context) {
-	var req struct {
-		CustomerID string `json:"customer_id"`
-		ItemName   string `json:"item_name"`
-		Amount     int64  `json:"amount"`
-	}
-	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid payload"})
+	idemKey := c.GetHeader("Idempotency-Key")
+	if idemKey == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Header 'Idempotency-Key' is required"})
 		return
 	}
 
-	order, err := h.useCase.CreateOrder(req.CustomerID, req.ItemName, req.Amount)
-	if err != nil {
-		if err.Error() == "503 Service Unavailable" {
-			c.JSON(http.StatusServiceUnavailable, gin.H{"error": err.Error()})
-			return
-		}
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+	var req createOrderRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request payload"})
 		return
 	}
+
+	order, err := h.useCase.CreateOrder(req.CustomerID, req.ItemName, req.Amount, idemKey)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
 	c.JSON(http.StatusCreated, order)
 }
 
 func (h *OrderHandler) GetOrder(c *gin.Context) {
-	id := c.Param("id")
-	order, err := h.useCase.GetOrder(id)
+	order, err := h.useCase.GetOrder(c.Param("id"))
 	if err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "Order not found"})
 		return
@@ -49,10 +53,9 @@ func (h *OrderHandler) GetOrder(c *gin.Context) {
 }
 
 func (h *OrderHandler) CancelOrder(c *gin.Context) {
-	id := c.Param("id")
-	if err := h.useCase.CancelOrder(id); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+	if err := h.useCase.CancelOrder(c.Param("id")); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to cancel order"})
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"message": "Order cancelled"})
+	c.JSON(http.StatusOK, gin.H{"message": "Order cancelled successfully"})
 }

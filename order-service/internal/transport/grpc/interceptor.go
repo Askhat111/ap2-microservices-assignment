@@ -10,9 +10,7 @@ import (
 
 func LoggingInterceptor(ctx context.Context, req interface{}, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (interface{}, error) {
 	start := time.Now()
-
 	resp, err := handler(ctx, req)
-
 	duration := time.Since(start)
 
 	if err != nil {

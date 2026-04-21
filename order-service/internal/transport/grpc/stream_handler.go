@@ -9,23 +9,29 @@ import (
 
 type OrderStreamHandler struct {
 	servicepb.UnimplementedOrderTrackingServiceServer
-	statusChan chan *basepb.OrderStatusUpdate
+	broadcaster *OrderBroadcaster
 }
 
-func NewOrderStreamHandler(ch chan *basepb.OrderStatusUpdate) *OrderStreamHandler {
-	return &OrderStreamHandler{statusChan: ch}
+func NewOrderStreamHandler(b *OrderBroadcaster) *OrderStreamHandler {
+	return &OrderStreamHandler{broadcaster: b}
 }
 
 func (h *OrderStreamHandler) SubscribeToOrderUpdates(req *basepb.OrderRequest, stream servicepb.OrderTrackingService_SubscribeToOrderUpdatesServer) error {
-	log.Printf("Client subcscribed to updating order: %s", req.GetOrderId())
+	log.Println("[Stream] Postman connected to gRPC Stream!")
+	ch := h.broadcaster.Subscribe()
+	defer h.broadcaster.Unsubscribe(ch)
 
-	for update := range h.statusChan {
-		if update.OrderId == req.GetOrderId() {
+	for {
+		select {
+		case <-stream.Context().Done():
+			log.Println("[Stream] Postman disconnected.")
+			return nil
+		case update := <-ch:
 			if err := stream.Send(update); err != nil {
-				log.Printf("Stream Error: %v", err)
+				log.Printf("Stream Send Error: %v", err)
 				return err
 			}
+			log.Printf("[Stream] Successfully pushed Order %s to Postman!", update.OrderId)
 		}
 	}
-	return nil
 }

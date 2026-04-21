@@ -4,10 +4,8 @@ import (
 	"database/sql"
 	"log"
 	"net"
-	"net/http"
 	"os"
 
-	basepb "github.com/Askhat111/converted-proto/base/frontend/v1"
 	servicepb "github.com/Askhat111/converted-proto/service/frontend/client/v1"
 
 	"order-service/internal/gateway"
@@ -20,73 +18,62 @@ import (
 	"github.com/gin-gonic/gin"
 	_ "github.com/lib/pq"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/reflection"
 )
 
 func main() {
-	//Database Configuration
-	connStr := os.Getenv("DATABASE_URL")
-	if connStr == "" {
-		connStr = "host=127.0.0.1 port=55432 user=order_user password=secretpassword dbname=order_db sslmode=disable"
+	dbURL := os.Getenv("DATABASE_URL")
+	if dbURL == "" {
+		dbURL = "host=127.0.0.1 port=55432 user=order_user password=secretpassword dbname=order_db sslmode=disable"
 	}
-	db, err := sql.Open("postgres", connStr)
+	db, err := sql.Open("postgres", dbURL)
 	if err != nil {
-		log.Fatalf("Failed to connect to database: %v", err)
+		log.Fatalf("DB Error: %v", err)
 	}
-
 	repo := repository.NewPostgresOrderRepository(db)
 
-	//gRPC Client Configuration (Connection to Payment Service)
 	paymentAddr := os.Getenv("PAYMENT_SERVICE_ADDR")
 	if paymentAddr == "" {
 		paymentAddr = "localhost:50051"
 	}
 	paymentGateway, err := gateway.NewPaymentGateway(paymentAddr)
 	if err != nil {
-		log.Fatalf("Failed to initialize Payment Gateway: %v", err)
+		log.Fatalf("Payment Gateway Error: %v", err)
 	}
 
-	//Channel for Real-time Status Updates (Streaming)
-	updateChan := make(chan *basepb.OrderStatusUpdate, 100)
+	broadcaster := grpctransport.NewOrderBroadcaster()
+	uc := usecase.NewOrderUseCase(repo, paymentGateway, broadcaster)
 
-	//UseCase Initialization
-	uc := usecase.NewOrderUseCase(repo, paymentGateway, updateChan)
-
-	//REST Server Startup (Gin) in a separate goroutine
-	handler := httptransport.NewOrderHandler(uc)
+	//REST API
 	r := gin.Default()
 	r.Use(cors.Default())
-	httptransport.RegisterRoutes(r, handler)
+	restHandler := httptransport.NewOrderHandler(uc)
+	httptransport.RegisterRoutes(r, restHandler)
 
 	go func() {
 		restPort := os.Getenv("REST_PORT")
 		if restPort == "" {
 			restPort = ":8080"
 		}
-		log.Printf("REST Server is running on %s", restPort)
-		if err := r.Run(restPort); err != nil && err != http.ErrServerClosed {
-			log.Fatalf("REST Server error: %v", err)
-		}
+		log.Printf("REST Server running on %s", restPort)
+		r.Run(restPort)
 	}()
 
-	//gRPC Server Startup (Order Tracking Streaming)
+	//gRPC Server
 	grpcPort := os.Getenv("GRPC_PORT")
 	if grpcPort == "" {
 		grpcPort = ":50052"
 	}
 	lis, err := net.Listen("tcp", grpcPort)
 	if err != nil {
-		log.Fatalf("Failed to listen on port %s: %v", grpcPort, err)
+		log.Fatalf("gRPC Listen Error: %v", err)
 	}
 
-	grpcServer := grpc.NewServer(
-		grpc.UnaryInterceptor(grpctransport.LoggingInterceptor),
-	)
-
-	streamHandler := grpctransport.NewOrderStreamHandler(updateChan)
+	grpcServer := grpc.NewServer()
+	streamHandler := grpctransport.NewOrderStreamHandler(broadcaster)
 	servicepb.RegisterOrderTrackingServiceServer(grpcServer, streamHandler)
+	reflection.Register(grpcServer)
 
-	log.Printf("Order gRPC Streaming Server is running on %s", grpcPort)
-	if err := grpcServer.Serve(lis); err != nil {
-		log.Fatalf("gRPC Server error: %v", err)
-	}
+	log.Printf("gRPC Streaming Server running on %s", grpcPort)
+	grpcServer.Serve(lis)
 }
