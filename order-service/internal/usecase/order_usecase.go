@@ -2,9 +2,10 @@ package usecase
 
 import (
 	"errors"
+	"time"
+
 	"order-service/internal/domain"
 	grpctransport "order-service/internal/transport/grpc"
-	"time"
 
 	basepb "github.com/Askhat111/converted-proto/base/frontend/v1"
 	"github.com/google/uuid"
@@ -48,8 +49,9 @@ func (uc *OrderUseCase) CreateOrder(customerID, itemName string, amount int64, i
 	}
 
 	paymentStatus, err := uc.gateway.ProcessPayment(order.ID, order.Amount)
+
 	newStatus := "Paid"
-	if err != nil || paymentStatus == "Failed" || paymentStatus == "Declined" {
+	if err != nil || paymentStatus != "Authorized" {
 		newStatus = "Failed"
 	}
 
@@ -58,7 +60,7 @@ func (uc *OrderUseCase) CreateOrder(customerID, itemName string, amount int64, i
 
 	uc.broadcaster.Broadcast(&basepb.OrderStatusUpdate{
 		OrderId:   order.ID,
-		Status:    newStatus,
+		Status:    order.Status,
 		UpdatedAt: timestamppb.Now(),
 	})
 

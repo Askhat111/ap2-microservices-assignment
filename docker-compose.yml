@@ -1,4 +1,18 @@
 services:
+  rabbitmq:
+    image: rabbitmq:3-management
+    environment:
+      RABBITMQ_DEFAULT_USER: admin
+      RABBITMQ_DEFAULT_PASS: admin123
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
   order-db:
     image: postgres:15
     environment:
@@ -20,3 +34,39 @@ services:
       - ./payment-service/migrations/init.sql:/docker-entrypoint-initdb.d/init.sql
     ports:
       - "55433:5432"
+
+  order-service:
+    build: ./order-service
+    environment:
+      DATABASE_URL: postgres://order_user:secretpassword@order-db:5432/order_db?sslmode=disable
+      PAYMENT_SERVICE_ADDR: payment-service:50051
+      REST_PORT: :8080
+      GRPC_PORT: :50052
+    ports:
+      - "8080:8080"
+      - "50052:50052"
+    depends_on:
+      - order-db
+      - payment-service
+
+  payment-service:
+    build: ./payment-service
+    environment:
+      DATABASE_URL: postgres://payment_user:secretpassword@payment-db:5432/payment_db?sslmode=disable
+      GRPC_PORT: :50051
+      RABBITMQ_URL: amqp://admin:admin123@rabbitmq:5672/
+    ports:
+      - "50051:50051"
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      payment-db:
+        condition: service_started
+
+  notification-service:
+    build: ./notification-service
+    environment:
+      RABBITMQ_URL: amqp://admin:admin123@rabbitmq:5672/
+    depends_on:
+      rabbitmq:
+        condition: service_healthy

@@ -30,3 +30,22 @@ func (h *PaymentHandler) ProcessPayment(ctx context.Context, req *basepb.Payment
 		Status:        payment.Status,
 	}, nil
 }
+
+func (h *PaymentHandler) ListPayments(ctx context.Context, req *basepb.ListPaymentsRequest) (*basepb.ListPaymentsResponse, error) {
+	payments, err := h.useCase.GetPaymentsByStatus(req.Status)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to list payments: %v", err)
+	}
+
+	var pbPayments []*basepb.PaymentResponse
+	for _, p := range payments {
+		pbPayments = append(pbPayments, &basepb.PaymentResponse{
+			TransactionId: p.TransactionID,
+			Status:        p.Status,
+		})
+	}
+
+	return &basepb.ListPaymentsResponse{
+		Payments: pbPayments,
+	}, nil
+}

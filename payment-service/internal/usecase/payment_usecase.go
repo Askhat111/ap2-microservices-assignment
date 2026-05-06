@@ -1,17 +1,21 @@
 package usecase
 
 import (
+	"fmt"
+	"log"
 	"payment-service/internal/domain"
+	"payment-service/internal/publisher"
 
 	"github.com/google/uuid"
 )
 
 type PaymentUseCase struct {
-	repo domain.PaymentRepository
+	repo      domain.PaymentRepository
+	publisher publisher.Publisher
 }
 
-func NewPaymentUseCase(repo domain.PaymentRepository) *PaymentUseCase {
-	return &PaymentUseCase{repo: repo}
+func NewPaymentUseCase(repo domain.PaymentRepository, pub publisher.Publisher) *PaymentUseCase {
+	return &PaymentUseCase{repo: repo, publisher: pub}
 }
 
 func (uc *PaymentUseCase) Process(orderID string, amount int64) (*domain.Payment, error) {
@@ -28,10 +32,29 @@ func (uc *PaymentUseCase) Process(orderID string, amount int64) (*domain.Payment
 		Status:        status,
 	}
 
-	err := uc.repo.Save(payment)
-	return payment, err
+	if err := uc.repo.Save(payment); err != nil {
+		return nil, err
+	}
+
+	event := publisher.PaymentEvent{
+		EventID:       uuid.NewString(),
+		OrderID:       payment.OrderID,
+		Amount:        payment.Amount,
+		CustomerEmail: fmt.Sprintf("customer_%s@gmail.com", orderID),
+		Status:        payment.Status,
+	}
+
+	if err := uc.publisher.Publish(event); err != nil {
+		log.Printf("[Warning] Failed to publish payment event for order %s: %v", orderID, err)
+	}
+
+	return payment, nil
 }
 
 func (uc *PaymentUseCase) GetPaymentStatus(orderID string) (*domain.Payment, error) {
 	return uc.repo.GetByOrderID(orderID)
+}
+
+func (uc *PaymentUseCase) GetPaymentsByStatus(status string) ([]*domain.Payment, error) {
+	return uc.repo.ListByStatus(status)
 }
