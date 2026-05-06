@@ -35,20 +35,6 @@ services:
     ports:
       - "55433:5432"
 
-  order-service:
-    build: ./order-service
-    environment:
-      DATABASE_URL: postgres://order_user:secretpassword@order-db:5432/order_db?sslmode=disable
-      PAYMENT_SERVICE_ADDR: payment-service:50051
-      REST_PORT: :8080
-      GRPC_PORT: :50052
-    ports:
-      - "8080:8080"
-      - "50052:50052"
-    depends_on:
-      - order-db
-      - payment-service
-
   payment-service:
     build: ./payment-service
     environment:
@@ -62,6 +48,7 @@ services:
         condition: service_healthy
       payment-db:
         condition: service_started
+    restart: on-failure
 
   notification-service:
     build: ./notification-service
@@ -70,3 +57,19 @@ services:
     depends_on:
       rabbitmq:
         condition: service_healthy
+    restart: on-failure
+
+  order-service:
+    build: ./order-service
+    environment:
+      DATABASE_URL: postgres://order_user:secretpassword@order-db:5432/order_db?sslmode=disable
+      PAYMENT_SERVICE_ADDR: payment-service:50051
+      REST_PORT: :8080
+      GRPC_PORT: :50052
+    ports:
+      - "8080:8080"
+      - "50052:50052"
+    depends_on:
+      - order-db
+      - payment-service
+    restart: on-failure

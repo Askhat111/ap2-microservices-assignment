@@ -7,7 +7,11 @@ import (
 	amqp "github.com/rabbitmq/amqp091-go"
 )
 
-const queueName = "payment.completed"
+const (
+	queueName   = "payment.completed"
+	dlxExchange = "payment.dlx"
+	dlqQueue    = "payment.completed.dlq"
+)
 
 type PaymentEvent struct {
 	EventID       string `json:"event_id"`
@@ -39,15 +43,32 @@ func NewRabbitMQPublisher(url string) (*RabbitMQPublisher, error) {
 		return nil, err
 	}
 
-	_, err = ch.QueueDeclare(
+	if err := ch.ExchangeDeclare(dlxExchange, "direct", true, false, false, false, nil); err != nil {
+		ch.Close()
+		conn.Close()
+		return nil, err
+	}
+
+	if _, err := ch.QueueDeclare(dlqQueue, true, false, false, false, nil); err != nil {
+		ch.Close()
+		conn.Close()
+		return nil, err
+	}
+
+	if err := ch.QueueBind(dlqQueue, dlqQueue, dlxExchange, false, nil); err != nil {
+		ch.Close()
+		conn.Close()
+		return nil, err
+	}
+
+	if _, err := ch.QueueDeclare(
 		queueName,
-		true,
-		false,
-		false,
-		false,
-		nil,
-	)
-	if err != nil {
+		true, false, false, false,
+		amqp.Table{
+			"x-dead-letter-exchange":    dlxExchange,
+			"x-dead-letter-routing-key": dlqQueue,
+		},
+	); err != nil {
 		ch.Close()
 		conn.Close()
 		return nil, err

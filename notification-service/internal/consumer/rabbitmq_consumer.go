@@ -5,6 +5,7 @@ import (
 	"log"
 	"notification-service/internal/domain"
 	"notification-service/internal/usecase"
+	"sync"
 
 	amqp "github.com/rabbitmq/amqp091-go"
 )
@@ -17,9 +18,11 @@ const (
 )
 
 type RabbitMQConsumer struct {
-	conn     *amqp.Connection
-	channel  *amqp.Channel
-	notifier *usecase.Notifier
+	conn        *amqp.Connection
+	channel     *amqp.Channel
+	notifier    *usecase.Notifier
+	mu          sync.Mutex
+	retryCounts map[string]int
 }
 
 func NewRabbitMQConsumer(url string, notifier *usecase.Notifier) (*RabbitMQConsumer, error) {
@@ -46,7 +49,12 @@ func NewRabbitMQConsumer(url string, notifier *usecase.Notifier) (*RabbitMQConsu
 		return nil, err
 	}
 
-	return &RabbitMQConsumer{conn: conn, channel: ch, notifier: notifier}, nil
+	return &RabbitMQConsumer{
+		conn:        conn,
+		channel:     ch,
+		notifier:    notifier,
+		retryCounts: make(map[string]int),
+	}, nil
 }
 
 func setupQueues(ch *amqp.Channel) error {
@@ -75,21 +83,32 @@ func setupQueues(ch *amqp.Channel) error {
 	return nil
 }
 
-func retryCount(msg amqp.Delivery) int64 {
-	xDeath, ok := msg.Headers["x-death"]
-	if !ok {
-		return 0
-	}
-	deaths, ok := xDeath.([]interface{})
-	if !ok || len(deaths) == 0 {
-		return 0
-	}
-	entry, ok := deaths[0].(amqp.Table)
-	if !ok {
-		return 0
-	}
-	count, _ := entry["count"].(int64)
+func (c *RabbitMQConsumer) getAndIncrementRetry(eventID string) int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	count := c.retryCounts[eventID]
+	c.retryCounts[eventID]++
 	return count
+}
+
+func (c *RabbitMQConsumer) clearRetry(eventID string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	delete(c.retryCounts, eventID)
+}
+
+func (c *RabbitMQConsumer) publishToDLQ(body []byte) error {
+	return c.channel.Publish(
+		dlxExchange,
+		dlqQueue,
+		false,
+		false,
+		amqp.Publishing{
+			ContentType:  "application/json",
+			DeliveryMode: amqp.Persistent,
+			Body:         body,
+		},
+	)
 }
 
 func (c *RabbitMQConsumer) Start() error {
@@ -106,25 +125,28 @@ func (c *RabbitMQConsumer) Start() error {
 	for msg := range msgs {
 		var event domain.PaymentEvent
 		if err := json.Unmarshal(msg.Body, &event); err != nil {
-			log.Printf("[Consumer] Malformed message, sending to DLQ: %v", err)
-			msg.Nack(false, false)
+			log.Printf("[Consumer] Malformed message, discarding: %v", err)
+			msg.Ack(false)
 			continue
 		}
 
-		retries := retryCount(msg)
-
 		if event.Amount == 13 {
-			if retries >= maxRetries {
-				log.Printf("[DLQ] Order %s failed %d times → moving to DLQ", event.OrderID, retries)
-				msg.Nack(false, false)
+			attempt := c.getAndIncrementRetry(event.EventID)
+
+			if attempt >= maxRetries {
+				log.Printf("[DLQ] Order %s failed %d times → moving to DLQ", event.OrderID, attempt)
+				c.publishToDLQ(msg.Body)
+				c.clearRetry(event.EventID)
+				msg.Ack(false)
 			} else {
-				log.Printf("[RETRY] Order %s failed (attempt %d/%d), requeueing...", event.OrderID, retries+1, maxRetries)
+				log.Printf("[RETRY] Order %s failed (attempt %d/%d), requeueing...", event.OrderID, attempt+1, maxRetries)
 				msg.Nack(false, true)
 			}
 			continue
 		}
 
 		c.notifier.Handle(event)
+		c.clearRetry(event.EventID)
 		msg.Ack(false)
 	}
 
