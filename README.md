@@ -55,6 +55,8 @@ Files: notification-service/internal/consumer/rabbitmq_consumer.go
 Messages that fail permanently (detected by amount=13 for testing) are retried 3 times, then sent to RabbitMQ Dead Letter Queue for manual inspection.
 
 Architecture
+
+```mermaid
 flowchart TB
     Client([Client]) -->|HTTP POST/GET| RateLimiter
 
