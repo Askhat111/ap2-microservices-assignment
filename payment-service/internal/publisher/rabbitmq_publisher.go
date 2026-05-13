@@ -8,7 +8,7 @@ import (
 )
 
 const (
-	queueName   = "payment.completed"
+	mainQueue   = "payment.completed"
 	dlxExchange = "payment.dlx"
 	dlqQueue    = "payment.completed.dlq"
 )
@@ -36,45 +36,39 @@ func NewRabbitMQPublisher(url string) (*RabbitMQPublisher, error) {
 	if err != nil {
 		return nil, err
 	}
-
 	ch, err := conn.Channel()
 	if err != nil {
 		conn.Close()
 		return nil, err
 	}
+	if err := declareQueues(ch); err != nil {
+		ch.Close()
+		conn.Close()
+		return nil, err
+	}
+	return &RabbitMQPublisher{conn: conn, channel: ch}, nil
+}
 
+func declareQueues(ch *amqp.Channel) error {
 	if err := ch.ExchangeDeclare(dlxExchange, "direct", true, false, false, false, nil); err != nil {
-		ch.Close()
-		conn.Close()
-		return nil, err
+		return err
 	}
-
 	if _, err := ch.QueueDeclare(dlqQueue, true, false, false, false, nil); err != nil {
-		ch.Close()
-		conn.Close()
-		return nil, err
+		return err
 	}
-
 	if err := ch.QueueBind(dlqQueue, dlqQueue, dlxExchange, false, nil); err != nil {
-		ch.Close()
-		conn.Close()
-		return nil, err
+		return err
 	}
-
 	if _, err := ch.QueueDeclare(
-		queueName,
-		true, false, false, false,
+		mainQueue, true, false, false, false,
 		amqp.Table{
 			"x-dead-letter-exchange":    dlxExchange,
 			"x-dead-letter-routing-key": dlqQueue,
 		},
 	); err != nil {
-		ch.Close()
-		conn.Close()
-		return nil, err
+		return err
 	}
-
-	return &RabbitMQPublisher{conn: conn, channel: ch}, nil
+	return nil
 }
 
 func (p *RabbitMQPublisher) Publish(event PaymentEvent) error {
@@ -82,13 +76,11 @@ func (p *RabbitMQPublisher) Publish(event PaymentEvent) error {
 	if err != nil {
 		return err
 	}
-
 	return p.channel.PublishWithContext(
 		context.Background(),
 		"",
-		queueName,
-		false,
-		false,
+		mainQueue,
+		false, false,
 		amqp.Publishing{
 			ContentType:  "application/json",
 			DeliveryMode: amqp.Persistent,

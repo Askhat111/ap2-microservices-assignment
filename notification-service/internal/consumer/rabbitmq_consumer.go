@@ -1,20 +1,22 @@
 package consumer
 
 import (
+	"context"
 	"encoding/json"
 	"log"
-	"notification-service/internal/domain"
-	"notification-service/internal/usecase"
 	"sync"
 
 	amqp "github.com/rabbitmq/amqp091-go"
+
+	"notification-service/internal/domain"
+	"notification-service/internal/usecase"
 )
 
 const (
-	mainQueue   = "payment.completed"
-	dlxExchange = "payment.dlx"
-	dlqQueue    = "payment.completed.dlq"
-	maxRetries  = 3
+	mainQueue     = "payment.completed"
+	dlxExchange   = "payment.dlx"
+	dlqQueue      = "payment.completed.dlq"
+	dlqMaxRetries = 3
 )
 
 type RabbitMQConsumer struct {
@@ -30,14 +32,12 @@ func NewRabbitMQConsumer(url string, notifier *usecase.Notifier) (*RabbitMQConsu
 	if err != nil {
 		return nil, err
 	}
-
 	ch, err := conn.Channel()
 	if err != nil {
 		conn.Close()
 		return nil, err
 	}
-
-	if err := setupQueues(ch); err != nil {
+	if err := declareQueues(ch); err != nil {
 		ch.Close()
 		conn.Close()
 		return nil, err
@@ -48,7 +48,6 @@ func NewRabbitMQConsumer(url string, notifier *usecase.Notifier) (*RabbitMQConsu
 		conn.Close()
 		return nil, err
 	}
-
 	return &RabbitMQConsumer{
 		conn:        conn,
 		channel:     ch,
@@ -57,19 +56,16 @@ func NewRabbitMQConsumer(url string, notifier *usecase.Notifier) (*RabbitMQConsu
 	}, nil
 }
 
-func setupQueues(ch *amqp.Channel) error {
+func declareQueues(ch *amqp.Channel) error {
 	if err := ch.ExchangeDeclare(dlxExchange, "direct", true, false, false, false, nil); err != nil {
 		return err
 	}
-
 	if _, err := ch.QueueDeclare(dlqQueue, true, false, false, false, nil); err != nil {
 		return err
 	}
-
 	if err := ch.QueueBind(dlqQueue, dlqQueue, dlxExchange, false, nil); err != nil {
 		return err
 	}
-
 	if _, err := ch.QueueDeclare(
 		mainQueue, true, false, false, false,
 		amqp.Table{
@@ -79,11 +75,10 @@ func setupQueues(ch *amqp.Channel) error {
 	); err != nil {
 		return err
 	}
-
 	return nil
 }
 
-func (c *RabbitMQConsumer) getAndIncrementRetry(eventID string) int {
+func (c *RabbitMQConsumer) dlqAttempt(eventID string) int {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	count := c.retryCounts[eventID]
@@ -91,27 +86,26 @@ func (c *RabbitMQConsumer) getAndIncrementRetry(eventID string) int {
 	return count
 }
 
-func (c *RabbitMQConsumer) clearRetry(eventID string) {
+func (c *RabbitMQConsumer) clearDLQCount(eventID string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	delete(c.retryCounts, eventID)
 }
 
-func (c *RabbitMQConsumer) publishToDLQ(body []byte) error {
-	return c.channel.Publish(
-		dlxExchange,
-		dlqQueue,
-		false,
-		false,
+func (c *RabbitMQConsumer) sendToDLQ(body []byte) {
+	err := c.channel.Publish(dlxExchange, dlqQueue, false, false,
 		amqp.Publishing{
 			ContentType:  "application/json",
 			DeliveryMode: amqp.Persistent,
 			Body:         body,
 		},
 	)
+	if err != nil {
+		log.Printf("[Consumer] Failed to publish to DLQ: %v", err)
+	}
 }
 
-func (c *RabbitMQConsumer) Start() error {
+func (c *RabbitMQConsumer) Start(ctx context.Context) error {
 	msgs, err := c.channel.Consume(
 		mainQueue, "notification-service",
 		false, false, false, false, nil,
@@ -120,37 +114,47 @@ func (c *RabbitMQConsumer) Start() error {
 		return err
 	}
 
-	log.Println("[Consumer] Waiting for payment events...")
+	log.Println("[Worker] Background worker started, waiting for events...")
 
-	for msg := range msgs {
-		var event domain.PaymentEvent
-		if err := json.Unmarshal(msg.Body, &event); err != nil {
-			log.Printf("[Consumer] Malformed message, discarding: %v", err)
-			msg.Ack(false)
-			continue
-		}
-
-		if event.Amount == 13 {
-			attempt := c.getAndIncrementRetry(event.EventID)
-
-			if attempt >= maxRetries {
-				log.Printf("[DLQ] Order %s failed %d times → moving to DLQ", event.OrderID, attempt)
-				c.publishToDLQ(msg.Body)
-				c.clearRetry(event.EventID)
-				msg.Ack(false)
-			} else {
-				log.Printf("[RETRY] Order %s failed (attempt %d/%d), requeueing...", event.OrderID, attempt+1, maxRetries)
-				msg.Nack(false, true)
+	for {
+		select {
+		case <-ctx.Done():
+			return nil
+		case msg, ok := <-msgs:
+			if !ok {
+				return nil
 			}
-			continue
+			c.handle(ctx, msg)
 		}
+	}
+}
 
-		c.notifier.Handle(event)
-		c.clearRetry(event.EventID)
+func (c *RabbitMQConsumer) handle(ctx context.Context, msg amqp.Delivery) {
+	var event domain.PaymentEvent
+	if err := json.Unmarshal(msg.Body, &event); err != nil {
+		log.Printf("[Consumer] Malformed message, discarding: %v", err)
 		msg.Ack(false)
+		return
 	}
 
-	return nil
+	if event.Amount == 13 {
+		attempt := c.dlqAttempt(event.EventID)
+		if attempt >= dlqMaxRetries {
+			log.Printf("[DLQ] Event %s failed %d times → moving to DLQ", event.EventID, attempt)
+			c.sendToDLQ(msg.Body)
+			c.clearDLQCount(event.EventID)
+			msg.Ack(false)
+		} else {
+			log.Printf("[DLQ-RETRY] Event %s attempt %d/%d, requeueing...",
+				event.EventID, attempt+1, dlqMaxRetries)
+			msg.Nack(false, true)
+		}
+		return
+	}
+
+	c.notifier.Handle(ctx, event)
+	c.clearDLQCount(event.EventID)
+	msg.Ack(false)
 }
 
 func (c *RabbitMQConsumer) Close() {

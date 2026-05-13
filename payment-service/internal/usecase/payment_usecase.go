@@ -3,10 +3,11 @@ package usecase
 import (
 	"fmt"
 	"log"
-	"payment-service/internal/domain"
-	"payment-service/internal/publisher"
 
 	"github.com/google/uuid"
+
+	"payment-service/internal/domain"
+	"payment-service/internal/publisher"
 )
 
 type PaymentUseCase struct {
@@ -45,7 +46,7 @@ func (uc *PaymentUseCase) Process(orderID string, amount int64) (*domain.Payment
 	}
 
 	if err := uc.publisher.Publish(event); err != nil {
-		log.Printf("[Warning] Failed to publish payment event for order %s: %v", orderID, err)
+		log.Printf("[Warning] Failed to publish event for order %s: %v", orderID, err)
 	}
 
 	return payment, nil

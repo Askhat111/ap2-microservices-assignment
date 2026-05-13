@@ -26,7 +26,6 @@ func main() {
 	if connStr == "" {
 		log.Fatal("DATABASE_URL is not set")
 	}
-
 	db, err := sql.Open("postgres", connStr)
 	if err != nil {
 		log.Fatalf("Failed to connect to database: %v", err)
@@ -37,7 +36,6 @@ func main() {
 	if rabbitURL == "" {
 		log.Fatal("RABBITMQ_URL is not set")
 	}
-
 	pub, err := publisher.NewRabbitMQPublisher(rabbitURL)
 	if err != nil {
 		log.Fatalf("Failed to connect to RabbitMQ: %v", err)
@@ -52,12 +50,10 @@ func main() {
 	if port == "" {
 		port = ":50051"
 	}
-
 	lis, err := net.Listen("tcp", port)
 	if err != nil {
-		log.Fatalf("Failed to listen on port %s: %v", port, err)
+		log.Fatalf("Failed to listen on %s: %v", port, err)
 	}
-
 	grpcServer := grpc.NewServer(
 		grpc.UnaryInterceptor(grpctransport.LoggingInterceptor),
 	)
@@ -71,8 +67,8 @@ func main() {
 		grpcServer.GracefulStop()
 	}()
 
-	log.Printf("Payment gRPC Server is running on %s", port)
+	log.Printf("Payment gRPC server running on %s", port)
 	if err := grpcServer.Serve(lis); err != nil {
-		log.Fatalf("gRPC Server error: %v", err)
+		log.Fatalf("gRPC server error: %v", err)
 	}
 }
