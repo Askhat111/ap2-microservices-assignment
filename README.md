@@ -55,80 +55,27 @@ Files: notification-service/internal/consumer/rabbitmq_consumer.go
 Messages that fail permanently (detected by amount=13 for testing) are retried 3 times, then sent to RabbitMQ Dead Letter Queue for manual inspection.
 
 Architecture
-┌─────────────┐
-│   Client    │
-└──────┬──────┘
-       │ HTTP (with rate limit)
-       ▼
-┌─────────────────────────────────────────────────┐
-│          Order Service :8080                    │
-│                                                  │
-│  ┌────────────────────────────────────────┐    │
-│  │ CreateOrder / GetOrder / CancelOrder   │    │
-│  │                                        │    │
-│  │ GetOrder uses Cache-Aside:             │    │
-│  │  1. Check Redis "order:<id>"           │    │
-│  │  2. If hit: return immediately         │    │
-│  │  3. If miss: query DB → store in cache │    │
-│  │                                        │    │
-│  │ CreateOrder caches result              │    │
-│  │ CancelOrder invalidates cache          │    │
-│  └────────────────────────────────────────┘    │
-│           │              │                      │
-│    Store  │              │ Sync RPC             │
-│    Cache  │              ▼                      │
-│           │        ┌──────────────┐            │
-│           │        │ Payment      │            │
-│           │        │ Service      │            │
-│           │        │ :50051       │            │
-│           │        └──────┬───────┘            │
-│           │               │                    │
-│           │               ▼ Publish event      │
-│           │        ┌──────────────┐            │
-│           │        │ RabbitMQ     │            │
-│           │        │ Broker       │            │
-│           │        └──────┬───────┘            │
-│           │               │                    │
-│           ▼               ▼                    │
-│  ┌──────────────┐  ┌──────────────┐           │
-│  │ Redis Cache  │  │ Rate Limiter │           │
-│  │              │  │              │           │
-│  │ order:<id>   │  │ rate_limit   │           │
-│  │ (5 min TTL)  │  │ :<client_ip> │           │
-│  └──────────────┘  └──────────────┘           │
-└─────────────────────────────────────────────────┘
-                       │ Message
-                       ▼
-┌─────────────────────────────────────────────────┐
-│   Notification Service (Background Worker)      │
-│                                                  │
-│  ┌────────────────────────────────────────┐    │
-│  │ Consumer: Listen to RabbitMQ queue      │    │
-│  │                                        │    │
-│  │ For each event:                        │    │
-│  │  1. Check Redis: already processed?    │    │
-│  │     - Yes → skip (idempotency)         │    │
-│  │     - No → continue                    │    │
-│  │                                        │    │
-│  │  2. Try to send email (max 3 times)   │    │
-│  │     Attempt 1 fails → wait 2s  → retry │    │
-│  │     Attempt 2 fails → wait 4s  → retry │    │
-│  │     Attempt 3 fails → wait 8s  → retry │    │
-│  │                                        │    │
-│  │  3. Store result in Redis:             │    │
-│  │     "sent" or "failed"                 │    │
-│  │                                        │    │
-│  │  4. If poison msg (amount=13):         │    │
-│  │     After 3 DLQ retries → send to DLQ │    │
-│  └────────────────────────────────────────┘    │
-│           │            │          │            │
-│           ▼            ▼          ▼            │
-│   ┌────────────┐ ┌──────────┐ ┌──────────┐   │
-│   │ Redis      │ │ Email    │ │ DLQ      │   │
-│   │ Idempotency│ │ Provider │ │ Queue    │   │
-│   │            │ │(Adapter) │ │(Poison)  │   │
-│   └────────────┘ └──────────┘ └──────────┘   │
-└─────────────────────────────────────────────────┘
+flowchart TB
+    Client([Client]) -->|HTTP POST/GET| RateLimiter
+
+    subgraph "Order Service (:8080)"
+        RateLimiter{Rate Limiter} -->|Allowed| OrderAPI[Order API]
+        RateLimiter -->|Limit Exceeded| 429[HTTP 429]
+        OrderAPI <-->|Cache-Aside| RedisCache[(Redis: Order Cache)]
+        OrderAPI -->|Sync RPC| PaymentAPI[Payment API :50051]
+    end
+
+    PaymentAPI -->|Publish Event| RabbitMQ[[RabbitMQ Broker]]
+
+    subgraph "Notification Service (Background Worker)"
+        RabbitMQ -->|Consume Event| Consumer[Message Consumer]
+        Consumer -->|1. Check Idempotency| RedisIdem[(Redis: Idempotency)]
+        Consumer -->|2. Process & Retry| EmailAdapter{Email Adapter}
+        Consumer -->|3. Max Retries Reached| DLQ[(DLQ: payment.completed.dlq)]
+    end
+
+    EmailAdapter -->|Simulated Mode| MockProvider([Mock Email])
+    EmailAdapter -->|Real Mode| RealProvider([Real SMTP])
 
 How to Test
 Cache-Aside
